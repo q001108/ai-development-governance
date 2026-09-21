@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/q001108/ai-development-governance/governance/v3/acceptance-plan.schema.json",
+  "title": "AcceptancePlan v3.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["SchemaVersion", "GovernanceVersion", "RequirementId", "PlanVersion", "ControlProfileRef", "PreviousPlanRef", "PreviousPlanRevision", "Controls"],
+  "properties": {
+    "SchemaVersion": {"enum": ["v3.0", "v3.0.1"]},
+    "GovernanceVersion": {"enum": ["v3.0", "v3.0.1"]},
+    "RequirementId": {"type": "string", "pattern": "^REQ-(?:[0-9]{8}-[0-9]{3}|[A-Z0-9](?:[A-Z0-9._-]{0,30}[A-Z0-9])?-[0-9]{8}-[0-9]{2,})$"},
+    "PlanVersion": {"type": "string", "pattern": "^v[1-9][0-9]*\\.[0-9]+$"},
+    "ControlProfileRef": {"type": "string", "minLength": 1},
+    "PreviousPlanRef": {"type": ["string", "null"], "minLength": 1},
+    "PreviousPlanRevision": {"type": ["string", "null"], "pattern": "^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$"},
+    "Controls": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/control"}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"PlanVersion": {"const": "v1.0"}}, "required": ["PlanVersion"]},
+      "then": {"properties": {"PreviousPlanRef": {"type": "null"}, "PreviousPlanRevision": {"type": "null"}}},
+      "else": {"properties": {"PreviousPlanRef": {"type": "string", "minLength": 1}, "PreviousPlanRevision": {"type": "string", "pattern": "^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$"}}}
+    }
+  ],
+  "$defs": {
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ControlId", "Class", "Statement", "SourceRefs", "AcceptanceSourceRef", "Triggered", "Blocking", "Owner", "MethodKind", "Method", "ExecutionPlatform", "EstimatedMinutes", "RiskTargetId"],
+      "properties": {
+        "ControlId": {"type": "string", "pattern": "^(BA|RB|QG|AD)-[0-9]{3}$"},
+        "Class": {"enum": ["BA", "RB", "QG", "AD"]},
+        "Statement": {"type": "string", "minLength": 1},
+        "SourceRefs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "AcceptanceSourceRef": {"type": ["string", "null"], "pattern": "^BAS-[0-9]{3}$"},
+        "Triggered": {"type": "boolean"},
+        "Blocking": {"type": "boolean"},
+        "Owner": {"enum": ["WRITER", "QA", "REVIEWER", "HUMAN_ACCEPTANCE"]},
+        "MethodKind": {"enum": ["NONE", "COMMAND", "DETERMINISTIC_ASSERTION", "STATIC_REVIEW", "ADVISORY"]},
+        "Method": {"type": ["string", "null"], "minLength": 1},
+        "ExecutionPlatform": {"enum": ["NONE", "WINDOWS", "MACOS", "LINUX"]},
+        "EstimatedMinutes": {"type": "integer", "minimum": 0},
+        "RiskTargetId": {"type": ["string", "null"], "pattern": "^RISK-[A-Z0-9][A-Z0-9_-]*$"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"Class": {"const": "BA"}}, "required": ["Class"]},
+          "then": {"properties": {
+            "SourceRefs": {"maxItems": 0}, "AcceptanceSourceRef": {"type": "string"},
+            "Triggered": {"const": true}, "Blocking": {"const": true},
+            "Owner": {"const": "HUMAN_ACCEPTANCE"}, "MethodKind": {"const": "NONE"},
+            "Method": {"type": "null"}, "ExecutionPlatform": {"const": "NONE"},
+            "EstimatedMinutes": {"const": 0}, "RiskTargetId": {"type": "null"}
+          }}
+        },
+        {
+          "if": {"properties": {"Class": {"enum": ["RB", "QG"]}}, "required": ["Class"]},
+          "then": {"properties": {"SourceRefs": {"minItems": 1}, "AcceptanceSourceRef": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "RB"}}, "required": ["Class"]},
+          "then": {"properties": {"Owner": {"enum": ["WRITER", "QA", "REVIEWER"]}}}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "QG"}}, "required": ["Class"]},
+          "then": {"properties": {
+            "Owner": {"enum": ["WRITER", "QA"]},
+            "MethodKind": {"enum": ["NONE", "COMMAND", "DETERMINISTIC_ASSERTION"]}
+          }}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "AD"}}, "required": ["Class"]},
+          "then": {"properties": {
+            "SourceRefs": {"minItems": 1}, "AcceptanceSourceRef": {"type": "null"},
+            "Blocking": {"const": false}, "MethodKind": {"const": "ADVISORY"}
+          }}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "AD"}, "Triggered": {"const": false}}, "required": ["Class", "Triggered"]},
+          "then": {"properties": {"EstimatedMinutes": {"const": 0}, "RiskTargetId": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "AD"}, "Triggered": {"const": true}}, "required": ["Class", "Triggered"]},
+          "then": {"properties": {"EstimatedMinutes": {"minimum": 1}, "RiskTargetId": {"type": "string"}}}
+        },
+        {
+          "if": {"properties": {"Class": {"enum": ["RB", "QG"]}, "Triggered": {"const": false}}, "required": ["Class", "Triggered"]},
+          "then": {"properties": {
+            "Blocking": {"const": false}, "Owner": {"const": "WRITER"}, "MethodKind": {"const": "NONE"},
+            "Method": {"type": "null"}, "ExecutionPlatform": {"const": "NONE"},
+            "EstimatedMinutes": {"const": 0}, "RiskTargetId": {"type": "null"}
+          }}
+        },
+        {
+          "if": {"properties": {"Class": {"enum": ["RB", "QG"]}, "Triggered": {"const": true}}, "required": ["Class", "Triggered"]},
+          "then": {"properties": {"Blocking": {"const": true}, "Method": {"type": "string", "minLength": 1}, "ExecutionPlatform": {"enum": ["WINDOWS", "MACOS", "LINUX"]}, "EstimatedMinutes": {"minimum": 1}, "RiskTargetId": {"type": "string"}}}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "QG"}, "Triggered": {"const": true}}, "required": ["Class", "Triggered"]},
+          "then": {"properties": {"MethodKind": {"enum": ["COMMAND", "DETERMINISTIC_ASSERTION"]}}}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "RB"}, "Owner": {"const": "REVIEWER"}, "Triggered": {"const": true}}, "required": ["Class", "Owner", "Triggered"]},
+          "then": {"properties": {"MethodKind": {"const": "STATIC_REVIEW"}}}
+        },
+        {
+          "if": {"properties": {"Class": {"const": "RB"}, "Owner": {"enum": ["WRITER", "QA"]}, "Triggered": {"const": true}}, "required": ["Class", "Owner", "Triggered"]},
+          "then": {"properties": {"MethodKind": {"enum": ["COMMAND", "DETERMINISTIC_ASSERTION"]}}}
+        }
+      ]
+    }
+  }
+}
