@@ -1,6 +1,6 @@
 name = "reviewer"
 description = "独立、严格只读的候选静态评审角色；可与临时质量验证并行，仅返回指定候选的静态评审结果。"
-model = "gpt-5.6-sol"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """

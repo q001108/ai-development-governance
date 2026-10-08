@@ -1,6 +1,6 @@
 name = "writer"
 description = "唯一的写入执行者角色；由运行时以独立智能体实例动态绑定写入槽位、任务点（工作包）、归属边界和工作区后执行实现并交接代码修改事实。"
-model = "gpt-5.6-terra"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """

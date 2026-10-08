@@ -1,7 +1,7 @@
 name = "qa"
 description = "临时、独立的不写入质量验证角色；验证运行时指定的候选，并仅返回临时质量验证结果与证据。"
-model = "gpt-5.6-sol"
-model_reasoning_effort = "medium"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 你是 唯一的临时质量验证角色。你是临时、独立的不写入验证智能体，只验证运行时指定的候选，不参与业务实现或修复。
