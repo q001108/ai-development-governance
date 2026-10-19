@@ -2,11 +2,11 @@
 
 check --repo PATH checks Markdown tables/local links/rule references and role TOML.
 render --requirement-dir PATH --kind qa-index|review-index|changes prints a block.
-validate-plan checks v3.0/v3.0.1 ControlProfile and AcceptancePlan JSON contracts.
+validate-plan checks v3.0/v3.0.1/v3.0.2 ControlProfile and AcceptancePlan JSON contracts.
 init-developer writes local Git config; reserve-id writes shared local ID reservations.
 All other commands are read-only.
 Rendering supports persisted SchemaVersion v1.1 events using machine protocol v2.1
-under context document versions v2.1, v3.0 and v3.0.1. It checks consumed fields,
+under context document versions v2.1, v3.0, v3.0.1 and v3.0.2. It checks consumed fields,
 not the complete runtime Schema or gate validity.
 Corrections require runtime resolution and are deliberately not interpreted here.
 """
@@ -440,15 +440,18 @@ def validate_evaluations(items, field, allowed, result_key, repo, control_path):
 
 def validate_control_profile(data, control_path):
     LOCATION.set("ControlProfile")
-    current = data.get("GovernanceVersion") == "v3.0.1"
+    governance_version = data.get("GovernanceVersion")
+    require(governance_version in ("v3.0", "v3.0.1", "v3.0.2"), "GovernanceVersion")
+    has_baseline_bindings = governance_version in ("v3.0.1", "v3.0.2")
     exact_object(data, "ControlProfile", (
         "SchemaVersion", "GovernanceVersion", "DecisionRulesVersion", "RequirementId",
         "ProfileVersion", "SelectedProfile", "MinimumProfile", "PreviousProfileRef", "PreviousProfileRevision",
         "Classification", "BusinessAcceptanceSources", "ExecutionBudget", "PlatformScope",
         "RecordRefs",
-    ) + (("BaselineBindings",) if current else ()))
+    ) + (("BaselineBindings",) if has_baseline_bindings else ())
+      + (("BaselineSupersession",) if governance_version == "v3.0.2" else ()))
     for key in ("SchemaVersion", "GovernanceVersion", "DecisionRulesVersion"):
-        require(data.get(key) == ("v3.0.1" if current else "v3.0"), key)
+        require(data.get(key) == governance_version, key)
     requirement = string(data.get("RequirementId"), "RequirementId")
     require(valid_requirement_id(requirement), "RequirementId")
     require(bool(re.fullmatch(r"v[1-9]\d*\.\d+", string(data.get("ProfileVersion"), "ProfileVersion"))), "ProfileVersion")
@@ -462,8 +465,12 @@ def validate_control_profile(data, control_path):
     require((previous_ref is None) == (previous_revision is None) == (data["ProfileVersion"] == "v1.0"), "initial profile and previous binding")
 
     repo = repository_root(control_path)
-    if current:
-        validate_baseline_bindings(data["BaselineBindings"], repo, control_path)
+    if has_baseline_bindings:
+        validate_baseline_bindings(data["BaselineBindings"], repo, control_path, governance_version)
+    if governance_version == "v3.0.2":
+        supersession = data["BaselineSupersession"]
+        require(supersession is None or isinstance(supersession, dict), "BaselineSupersession")
+        require(previous_ref is not None or supersession is None, "initial profile cannot supersede a baseline")
 
     classification = exact_object(data.get("Classification"), "Classification", (
         "HardTriggers", "UpgradeTriggers", "LeanQualifications", "Unknowns", "DecisionRefs",
@@ -587,22 +594,24 @@ def content_digest(text):
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def validate_baseline_bindings(bindings, repo, control_path):
+def validate_baseline_bindings(bindings, repo, control_path, governance_version):
     exact_object(bindings, "BaselineBindings", ("Governance", "BusinessRevision", "Testing"))
     revision = string(bindings["BusinessRevision"], "BusinessRevision")
     require(bool(re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", revision)), "BusinessRevision")
     local_git(repo, "cat-file", "-e", revision + "^{commit}")
     for key in ("Governance", "Testing"):
         binding = exact_object(bindings[key], key + " binding", ("Version", "SourceRef", "SourceDigest", "Revision"))
-        require(binding["Version"] == "v3.0.1", key + " Version")
+        expected_version = governance_version if key == "Governance" else "v3.0.1"
+        require(binding["Version"] == expected_version, key + " Version")
         path = validate_file_reference(repo, control_path, binding["SourceRef"], key + " SourceRef")
-        expected = "docs/治理版本说明/v3.0.1治理修订说明.md" if key == "Governance" else "docs/开发规范/测试规范.md"
+        expected = (f"docs/治理版本说明/{governance_version}治理修订说明.md"
+                    if key == "Governance" else "docs/开发规范/测试规范.md")
         require(path.resolve() == (repo / expected).resolve(), key + " canonical source")
         require(path.suffix == ".md", key + " Markdown source")
         text = (git_text(repo, binding["Revision"], path.relative_to(repo).as_posix(), key)
                 if binding["Revision"] is not None else path.read_text(encoding="utf-8-sig"))
         require(content_digest(text) == binding["SourceDigest"], key + " SourceDigest")
-        require(bool(re.search(r"(?m)^版本[：:]\s*v3\.0\.1(?:[；;\s]|$)", text)), key + " document version")
+        require(bool(re.search(rf"(?m)^版本[：:]\s*{re.escape(expected_version)}(?:[；;\s]|$)", text)), key + " document version")
     require(bindings["Governance"]["SourceRef"] != bindings["Testing"]["SourceRef"], "independent governance/testing bindings")
 
 
@@ -752,7 +761,7 @@ def human_approval_reference(value):
     return value
 
 
-def validate_source_provenance(profile, control_path):
+def validate_source_provenance(profile, control_path, historical_revision=None):
     repo = repository_root(control_path)
     requirement = profile["RequirementId"]
     expected_baselines = {
@@ -765,7 +774,7 @@ def validate_source_provenance(profile, control_path):
         source_ref = source_parts[0].replace("\\", "/")
         source_path = safe_path(repo, repo / source_ref)
         require(source_path.is_file(), "SourceRef")
-        revision = source["ProvenanceRevision"]
+        revision = source["ProvenanceRevision"] or historical_revision
         source_text = (git_text(repo, revision, source_ref, "SourceRef") if revision
                        else source_path.read_text(encoding="utf-8-sig"))
         require(content_digest(source_text) == source["SourceDigest"], "SourceDigest binding")
@@ -827,6 +836,153 @@ def validate_source_provenance(profile, control_path):
             require(approval.get("ContractVersion") == source["SourceArtifactVersion"], "formal contract version binding")
 
 
+def validate_baseline_supersession(profile, previous, control_path, repo):
+    supersession = profile.get("BaselineSupersession")
+    if supersession is None:
+        return None
+    LOCATION.set("ControlProfile.BaselineSupersession")
+    require(profile["GovernanceVersion"] == "v3.0.2", "governance version")
+    exact_object(supersession, "BaselineSupersession", (
+        "Mode", "PreviousG1Ref", "CurrentG1Ref", "PreviousBaselineVersion",
+        "CurrentBaselineVersion", "SupersededAcceptanceSourceIds", "SupersededControls",
+        "HistoricalArtifactRefs", "HistoricalArtifactDigests",
+        "HistoricalSourceDisposition", "HistoricalSourceEvidenceRefs",
+        "HistoricalArtifactsRetained", "PriorCandidatesReusable", "NewG2Required",
+    ))
+    require(supersession["Mode"] == "G1_BASELINE_SUPERSESSION", "Mode")
+    require(supersession["HistoricalArtifactsRetained"] is True, "HistoricalArtifactsRetained")
+    require(supersession["PriorCandidatesReusable"] is False, "PriorCandidatesReusable")
+    require(supersession["NewG2Required"] is True, "NewG2Required")
+    history_refs = unique_strings(supersession["HistoricalArtifactRefs"], "HistoricalArtifactRefs", minimum=2)
+    history_digests = exact_object(
+        supersession["HistoricalArtifactDigests"], "HistoricalArtifactDigests", history_refs,
+    )
+    history_root = (repo / "docs/requirements" / profile["RequirementId"] / "history").resolve()
+    history_kinds = set()
+    for ref in history_refs:
+        path = validate_file_reference(repo, control_path, ref, "HistoricalArtifactRefs")
+        require(path.resolve().is_relative_to(history_root), "historical artifact requirement history location")
+        name = path.name
+        if re.fullmatch(r"control-profile-v[1-9]\d*\.\d+\.json", name):
+            history_kinds.add("profile")
+        elif re.fullmatch(r"acceptance-plan-v[1-9]\d*\.\d+\.json", name):
+            history_kinds.add("plan")
+        else:
+            raise Invalid(f"{LOCATION.get()}: historical artifact canonical filename")
+        require(bool(re.fullmatch(r"sha256:[0-9a-f]{64}", string(history_digests[ref], "historical artifact digest"))),
+                "historical artifact digest")
+        require(content_digest(path.read_text(encoding="utf-8-sig")) == history_digests[ref],
+                "historical artifact digest binding")
+    require(history_kinds == {"profile", "plan"}, "historical profile and plan snapshots")
+    require(supersession["HistoricalSourceDisposition"] in (
+        "FULLY_REPLAYABLE", "DIGEST_ONLY_LEGACY_SOURCE_UNAVAILABLE",
+    ), "HistoricalSourceDisposition")
+    source_evidence = set(unique_strings(
+        supersession["HistoricalSourceEvidenceRefs"], "HistoricalSourceEvidenceRefs", minimum=3,
+    ))
+    for ref in source_evidence:
+        validate_file_reference(repo, control_path, ref, "HistoricalSourceEvidenceRefs")
+    profile_snapshot_refs = {ref for ref in history_refs if Path(ref).name.startswith("control-profile-")}
+    current_baseline_refs = {
+        item["SourceRef"].split("#", 1)[0] for item in profile["BusinessAcceptanceSources"]
+        if item["SourceKind"] == "USER_REQUIREMENT"
+    }
+    require(profile_snapshot_refs <= source_evidence, "historical profile source evidence")
+    require(supersession["PreviousG1Ref"] in source_evidence, "previous G1 source evidence")
+    require(bool(current_baseline_refs & source_evidence), "current baseline history evidence")
+
+    previous_sources = {item["AcceptanceSourceId"]: item for item in previous["BusinessAcceptanceSources"]}
+    current_sources = {item["AcceptanceSourceId"]: item for item in profile["BusinessAcceptanceSources"]}
+    changed_sources = {ident for ident, source in previous_sources.items() if current_sources.get(ident) != source}
+    declared_sources = set(unique_strings(
+        supersession["SupersededAcceptanceSourceIds"], "SupersededAcceptanceSourceIds", minimum=1,
+    ))
+    require(changed_sources == declared_sources, "superseded acceptance source exact coverage")
+    require(all(previous_sources[ident]["SourceKind"] == "USER_REQUIREMENT" for ident in changed_sources),
+            "only new G1 may supersede user requirement sources")
+
+    previous_user_sources = [item for item in previous_sources.values() if item["SourceKind"] == "USER_REQUIREMENT"]
+    current_user_sources = [item for item in current_sources.values() if item["SourceKind"] == "USER_REQUIREMENT"]
+    previous_g1_refs = {item["ApprovalRef"].split("#", 1)[0].replace("\\", "/") for item in previous_user_sources}
+    current_g1_refs = {item["ApprovalRef"].split("#", 1)[0].replace("\\", "/") for item in current_user_sources}
+    previous_versions = {item["SourceArtifactVersion"] for item in previous_user_sources}
+    current_versions = {item["SourceArtifactVersion"] for item in current_user_sources}
+    require(previous_g1_refs == {supersession["PreviousG1Ref"]}, "PreviousG1Ref binding")
+    require(current_g1_refs == {supersession["CurrentG1Ref"]}, "CurrentG1Ref binding")
+    require(previous_versions == {supersession["PreviousBaselineVersion"]}, "PreviousBaselineVersion binding")
+    require(current_versions == {supersession["CurrentBaselineVersion"]}, "CurrentBaselineVersion binding")
+    previous_version = tuple(map(int, supersession["PreviousBaselineVersion"][1:].split(".")))
+    current_version = tuple(map(int, supersession["CurrentBaselineVersion"][1:].split(".")))
+    require(current_version > previous_version, "baseline version progression")
+
+    previous_g1_path = validate_file_reference(repo, control_path, supersession["PreviousG1Ref"], "PreviousG1Ref")
+    current_g1_path = validate_file_reference(repo, control_path, supersession["CurrentG1Ref"], "CurrentG1Ref")
+    previous_g1 = load_contract(previous_g1_path, "PreviousG1Ref")
+    current_g1 = load_contract(current_g1_path, "CurrentG1Ref")
+    validate_event_structure(previous_g1, profile["RequirementId"], previous_g1_path)
+    validate_event_structure(current_g1, profile["RequirementId"], current_g1_path)
+    require(datetime.fromisoformat(current_g1["CreatedAt"]) > datetime.fromisoformat(previous_g1["CreatedAt"]),
+            "current G1 must be later than previous G1")
+    return supersession
+
+
+def validate_historical_predecessor(supersession, repo, containing_file, kind, version, previous_text):
+    expected_name = f"{kind}-{version}.json"
+    refs = [ref for ref in supersession["HistoricalArtifactRefs"] if Path(ref).name == expected_name]
+    require(len(refs) == 1, "historical " + kind + " predecessor snapshot")
+    path = validate_file_reference(repo, containing_file, refs[0], "historical predecessor snapshot")
+    require(content_digest(path.read_text(encoding="utf-8-sig")) == content_digest(previous_text),
+            "historical " + kind + " predecessor binding")
+
+
+def validate_previous_source_provenance(profile, previous, previous_path, revision, repo, supersession):
+    if supersession is None:
+        validate_source_provenance(previous, previous_path)
+        return
+    try:
+        validate_source_provenance(previous, previous_path, revision)
+        return
+    except Invalid as error:
+        if (supersession["HistoricalSourceDisposition"] != "DIGEST_ONLY_LEGACY_SOURCE_UNAVAILABLE"
+                or not any(marker in str(error) for marker in (
+                    "SourceRef revision binding", "ApprovalRef revision binding",
+                ))):
+            raise
+
+    snapshot_ref = next(
+        ref for ref in supersession["HistoricalArtifactRefs"]
+        if Path(ref).name.startswith("control-profile-")
+    )
+    snapshot_path = validate_file_reference(repo, previous_path, snapshot_ref, "historical profile snapshot")
+    snapshot = load_contract(snapshot_path, "HistoricalControlProfile")
+    require(snapshot.get("RequirementId") == previous["RequirementId"], "historical profile RequirementId")
+    require(snapshot.get("BusinessAcceptanceSources") == previous["BusinessAcceptanceSources"],
+            "historical profile business source ledger")
+    for source in previous["BusinessAcceptanceSources"]:
+        if source["SourceKind"] != "USER_REQUIREMENT":
+            raise Invalid(f"{LOCATION.get()}: formal contract source requires full replay")
+        approval_ref = source["ApprovalRef"].split("#", 1)[0].replace("\\", "/")
+        approval_path = safe_path(repo, repo / approval_ref)
+        require(approval_path.is_file(), "legacy ApprovalRef")
+        approval_text = approval_path.read_text(encoding="utf-8-sig")
+        require(content_digest(approval_text) == source["ApprovalDigest"], "legacy ApprovalDigest binding")
+        approval = load_contract(approval_path, "legacy ApprovalRef")
+        validate_event_structure(approval, previous["RequirementId"], approval_path)
+        payload = approval["Payload"]
+        require(approval["EventType"] == "GATE_DECISION" and payload.get("Gate") == "G1"
+                and payload.get("Decision") == "CONFIRMED" and payload.get("DecisionMode") == "HUMAN",
+                "legacy G1 CONFIRMED")
+        require(payload.get("ArtifactVersion") == source["SourceArtifactVersion"],
+                "legacy G1 baseline version")
+    current_baseline_ref = next(
+        item["SourceRef"].split("#", 1)[0] for item in profile["BusinessAcceptanceSources"]
+        if item["SourceKind"] == "USER_REQUIREMENT"
+    )
+    current_baseline = safe_path(repo, repo / current_baseline_ref).read_text(encoding="utf-8-sig")
+    require(supersession["PreviousBaselineVersion"] in current_baseline, "current baseline previous version history")
+    require(Path(supersession["PreviousG1Ref"]).name in current_baseline, "current baseline previous G1 history")
+
+
 def validate_profile_chain(profile, control_path, repo, seen=None):
     seen = set() if seen is None else seen
     if profile["PreviousProfileRef"] is None:
@@ -846,16 +1002,26 @@ def validate_profile_chain(profile, control_path, repo, seen=None):
     sensitive(previous)
     validate_contract_schema(previous, repo, "control-profile.schema.json", "PreviousProfile")
     validate_control_profile(previous, previous_path)
-    validate_source_provenance(previous, previous_path)
     require(previous.get("RequirementId") == profile["RequirementId"], "PreviousProfileRef RequirementId")
-    require(PROFILE_RANK[profile["SelectedProfile"]] >= PROFILE_RANK[previous["SelectedProfile"]], "profile downgrade forbidden in v3.0 phase 1")
-    require(PROFILE_RANK[profile["MinimumProfile"]] >= PROFILE_RANK[previous["MinimumProfile"]], "MinimumProfile downgrade forbidden")
+    supersession = validate_baseline_supersession(profile, previous, control_path, repo)
+    if supersession is not None:
+        validate_historical_predecessor(
+            supersession, repo, control_path, "control-profile", previous["ProfileVersion"], previous_text,
+        )
+    validate_previous_source_provenance(
+        profile, previous, previous_path, profile["PreviousProfileRevision"], repo, supersession,
+    )
+    if supersession is None:
+        require(PROFILE_RANK[profile["SelectedProfile"]] >= PROFILE_RANK[previous["SelectedProfile"]], "profile downgrade forbidden without baseline supersession")
+        require(PROFILE_RANK[profile["MinimumProfile"]] >= PROFILE_RANK[previous["MinimumProfile"]], "MinimumProfile downgrade forbidden without baseline supersession")
     previous_hard = {item["Code"] for item in previous["Classification"]["HardTriggers"] if item["Matched"]}
     current_hard = {item["Code"] for item in profile["Classification"]["HardTriggers"] if item["Matched"]}
-    require(previous_hard <= current_hard, "matched hard trigger removal forbidden in phase 1")
+    if supersession is None:
+        require(previous_hard <= current_hard, "matched hard trigger removal forbidden without baseline supersession")
     previous_sources = {item["AcceptanceSourceId"]: item for item in previous["BusinessAcceptanceSources"]}
     current_sources = {item["AcceptanceSourceId"]: item for item in profile["BusinessAcceptanceSources"]}
-    require(all(current_sources.get(ident) == source for ident, source in previous_sources.items()), "business acceptance source removal or change forbidden")
+    if supersession is None:
+        require(all(current_sources.get(ident) == source for ident, source in previous_sources.items()), "business acceptance source removal or change forbidden")
     current_version = tuple(map(int, profile["ProfileVersion"][1:].split(".")))
     previous_version = tuple(map(int, previous["ProfileVersion"][1:].split(".")))
     require(current_version > previous_version, "ProfileVersion progression")
@@ -993,24 +1159,63 @@ def validate_plan_chain(plan, acceptance_path, profile, control_path, repo, seen
     identity = (revision.lower(), previous_plan_path.resolve())
     require(identity not in seen, "PreviousPlanRef cycle")
     seen.add(identity)
-    previous_plan = git_contract(repo, revision, previous_plan_path, "PreviousPlanRef")
+    previous_plan_text = git_text(repo, revision, previous_plan_path.resolve().relative_to(Path(repo).resolve()).as_posix(), "PreviousPlanRef")
+    try:
+        previous_plan = json.loads(previous_plan_text, object_pairs_hook=unique_object)
+    except json.JSONDecodeError:
+        raise Invalid("PreviousPlanRef: invalid JSON encoding or syntax") from None
+    require(isinstance(previous_plan, dict), "PreviousPlanRef")
+    sensitive(previous_plan)
     previous_profile = git_contract(repo, revision, previous_profile_path, "PreviousProfileRef")
     validate_contract_schema(previous_plan, repo, "acceptance-plan.schema.json", "PreviousPlan")
     validate_contract_schema(previous_profile, repo, "control-profile.schema.json", "PreviousProfile")
     previous_sources = validate_control_profile(previous_profile, previous_profile_path)
-    validate_source_provenance(previous_profile, previous_profile_path)
+    supersession = profile.get("BaselineSupersession")
+    if supersession is not None:
+        validate_historical_predecessor(
+            supersession, repo, acceptance_path, "acceptance-plan", previous_plan["PlanVersion"], previous_plan_text,
+        )
+    validate_previous_source_provenance(
+        profile, previous_profile, previous_profile_path, revision, repo, supersession,
+    )
     validate_acceptance_plan(previous_plan, previous_profile, previous_sources, previous_plan_path)
     require(reference_path(repo, previous_plan_path, previous_plan["ControlProfileRef"]).resolve() == previous_profile_path.resolve(), "previous plan/profile path binding")
     current_version = tuple(map(int, plan["PlanVersion"][1:].split(".")))
     previous_version = tuple(map(int, previous_plan["PlanVersion"][1:].split(".")))
     require(current_version > previous_version, "PlanVersion progression")
     current_controls = {item["ControlId"]: item for item in plan["Controls"]}
+    supersession = profile.get("BaselineSupersession")
+    changed_blocking_controls = set()
     for previous_control in previous_plan["Controls"]:
         if previous_control["Class"] not in ("BA", "RB", "QG") or not previous_control["Triggered"] or not previous_control["Blocking"]:
             continue
         current = current_controls.get(previous_control["ControlId"])
-        require(current is not None, "triggered blocking control removal forbidden")
-        require(current == previous_control, "triggered blocking control change forbidden in phase 1")
+        if current != previous_control:
+            changed_blocking_controls.add(previous_control["ControlId"])
+        if supersession is None:
+            require(current is not None, "triggered blocking control removal forbidden")
+            require(current == previous_control, "triggered blocking control change forbidden without baseline supersession")
+    if supersession is not None:
+        declared = set()
+        current_g1 = supersession["CurrentG1Ref"]
+        current_baselines = {
+            item["SourceRef"] for item in profile["BusinessAcceptanceSources"]
+            if item["SourceKind"] == "USER_REQUIREMENT"
+        }
+        for index, disposition in enumerate(array(supersession["SupersededControls"], "SupersededControls")):
+            LOCATION.set(f"ControlProfile.BaselineSupersession.SupersededControls[{index}]")
+            exact_object(disposition, "SupersededControl", ("ControlId", "Disposition", "BasisRefs"))
+            ident = string(disposition["ControlId"], "ControlId")
+            require(ident not in declared, "ControlId uniqueness")
+            declared.add(ident)
+            require(disposition["Disposition"] == "REMOVED_OR_REPLACED_BY_CONFIRMED_BASELINE", "Disposition")
+            refs = set(unique_strings(disposition["BasisRefs"], "BasisRefs", minimum=2))
+            for ref in refs:
+                validate_file_reference(repo, control_path, ref, "BasisRefs")
+            require(current_g1 in refs, "superseded control current G1 evidence")
+            require(bool(current_baselines & refs), "superseded control current baseline evidence")
+        require(declared == changed_blocking_controls and bool(declared),
+                "superseded control exact coverage")
     validate_plan_chain(previous_plan, previous_plan_path, previous_profile, previous_profile_path, repo, seen)
 
 
@@ -1109,7 +1314,8 @@ def validate_plan(control_path, acceptance_path, mode="live"):
         "Valid": True,
         "G2Eligible": mode == "live",
         "RequiredG2DecisionMode": (
-            "HUMAN" if any(item["Triggered"] and item["MethodKind"] == "DETERMINISTIC_ASSERTION" for item in plan["Controls"])
+            "HUMAN" if profile.get("BaselineSupersession") is not None
+            or any(item["Triggered"] and item["MethodKind"] == "DETERMINISTIC_ASSERTION" for item in plan["Controls"])
             else "AUTOMATIC_ALLOWED"
         ),
     }
@@ -1146,7 +1352,7 @@ def validate_adjustment(path):
         "ControlProfileDigest", "CandidateRef", "CandidateEventDigest", "G2Ref", "G2Digest", "OriginQARef", "OriginQADigest",
         "Reason", "EvidenceRefs", "EvidenceDigests", "Replacements", "ReviewerRef", "ReviewerDigest", "ApprovalRef", "ApprovalDigest",
     ))
-    require(data["GovernanceVersion"] == "v3.0.1", "adjustment governance version")
+    require(data["GovernanceVersion"] in ("v3.0.1", "v3.0.2"), "adjustment governance version")
     require(valid_requirement_id(data["RequirementId"]), "adjustment RequirementId")
     requirement_dir = repo / "docs/requirements" / data["RequirementId"]
     require(path.parent.resolve() == (requirement_dir / "adjustments").resolve(), "adjustment directory")
@@ -1157,7 +1363,7 @@ def validate_adjustment(path):
     validate_plan(profile_path, plan_path)
     profile = load_contract(profile_path, "ControlProfile")
     plan = load_contract(plan_path, "AcceptancePlan")
-    require(profile["RequirementId"] == data["RequirementId"] and profile["GovernanceVersion"] == "v3.0.1", "adjustment profile binding")
+    require(profile["RequirementId"] == data["RequirementId"] and profile["GovernanceVersion"] == data["GovernanceVersion"], "adjustment profile binding")
     require(profile["SelectedProfile"] in ("STANDARD", "CONTROLLED"), "adjustment requires independent quality profile")
     require(data["Reason"] in ("PREEXISTING_FAILURE", "BASELINE_UNATTRIBUTABLE", "VALIDATION_DEFINITION_INVALID"), "adjustment reason")
     evidence_refs = set(unique_strings(data["EvidenceRefs"], "adjustment evidence", minimum=1))
@@ -1342,7 +1548,7 @@ def load_events(root):
     context = safe_path(root, contexts[0]).read_text(encoding="utf-8-sig")
     LOCATION.set(contexts[0].name)
     versions = re.findall(r"(?:事实协议版本|FactProtocolVersion)[^\n]*?\b(v\d+\.\d+(?:\.\d+)?)\b", context)
-    require(len(set(versions)) == 1 and versions[0] in ("v2.1", "v3.0", "v3.0.1"), "FactProtocolVersion (context)")
+    require(len(set(versions)) == 1 and versions[0] in ("v2.1", "v3.0", "v3.0.1", "v3.0.2"), "FactProtocolVersion (context)")
     facts = safe_path(root, root / "facts")
     require(facts.is_dir(), "facts directory")
     events = {}
@@ -1397,7 +1603,7 @@ def route_reference(events, event):
 
 def validate_qa_resume(events, event, previous):
     """Check an append-only continuation of a blocked logical QA round."""
-    require(event["_context_document_version"] == "v3.0.1", "same-round resume document version")
+    require(event["_context_document_version"] in ("v3.0.1", "v3.0.2"), "same-round resume document version")
     payload = event["Payload"]
     source = resolve(events, payload.get("ResumeQAEventRef"), "QA_RESULT", event)
     require(previous is not None and source["EventId"] == previous["EventId"], "resume latest round event")
@@ -1498,7 +1704,7 @@ def render(root, kind):
             require(status in ("PASS", "FAIL", "BLOCKED"), "Status")
             require(status != "PASS" or not sensitive_issues, "sensitive evidence PASS")
             failures, blockers = array(p.get("ObservedFailures"), "ObservedFailures"), array(p.get("BlockingItems"), "BlockingItems")
-            current_protocol = event["_context_document_version"] == "v3.0.1"
+            current_protocol = event["_context_document_version"] in ("v3.0.1", "v3.0.2")
             quality_failures = attributed_failures(p) if current_protocol else failures
             for blocker in blockers:
                 require(isinstance(blocker, dict), "BlockingItems item")
@@ -1561,7 +1767,7 @@ def check(repo):
     LOCATION.set("repository")
     repo = Path(repo).absolute()
     files = [repo / "AGENTS.md", *sorted((repo / "docs/Agent治理").glob("*.md")), *sorted((repo / "docs/开发规范").glob("*.md"))]
-    files += sorted((repo / "docs/治理版本说明").glob("v3.0.1*.md"))
+    files += sorted((repo / "docs/治理版本说明").glob("v3.0.*.md"))
     expected_docs = {"Codex运行时拓扑", "多智能体协同开发治理流程", "治理配置与验收控制规范", "治理运行时事实协议", "开发溯源归档规范", "需求基线模板", "开发上下文包模板", "开发记录模板", "临时质量验证记录模板", "只读评审记录模板"}
     require(expected_docs <= {p.stem for p in (repo / "docs/Agent治理").glob("*.md")}, "governance document inventory")
     require({"项目开发总则", "测试规范"} <= {p.stem for p in (repo / "docs/开发规范").glob("*.md")}, "development standards inventory")

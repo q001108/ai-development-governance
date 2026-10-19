@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("governance_tools", Path(__file__).parents[1] / "governance_tools.py")
 g = importlib.util.module_from_spec(SPEC)
@@ -69,7 +70,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertTrue(all(len(line.split("|")) == 10 for line in output.splitlines()))
 
     def test_v3_context_document_and_initial_null_lineage(self):
-        for version in ("v3.0", "v3.0.1"):
+        for version in ("v3.0", "v3.0.1", "v3.0.2"):
             with self.subTest(version=version):
                 (self.root / "开发上下文包.md").write_text(f"事实协议版本：{version}\n", encoding="utf-8")
                 self.put("CAND-001", "CANDIDATE_STATE", {}, "candidates", RepairLineageRef=None)
@@ -116,8 +117,8 @@ class ProjectionTests(unittest.TestCase):
                 self.assertIn("WorkPackageId", stderr.getvalue())
                 self.assertNotIn("Traceback", stderr.getvalue())
 
-    def resumed_round(self):
-        (self.root / "开发上下文包.md").write_text("事实协议版本：v3.0.1\n", encoding="utf-8")
+    def resumed_round(self, version="v3.0.1"):
+        (self.root / "开发上下文包.md").write_text(f"事实协议版本：{version}\n", encoding="utf-8")
         self.put("TR-001", "TEST_READINESS", {}, "readiness")
         blocked = copy.deepcopy(self.qa)
         blocked.update(Status="BLOCKED", ValidationPlanRef="plan-v1", EffectiveValidationSet=[],
@@ -141,6 +142,38 @@ class ProjectionTests(unittest.TestCase):
         self.assertIn("QA-002 | 1", output)
         self.assertIn("BLOCKED", output)
         self.assertEqual(original, (self.root / "facts/qa/QA-001.json").read_bytes())
+
+    def test_v302_blocked_round_inherits_resume_and_binding_checks(self):
+        resumed = self.resumed_round("v3.0.2")
+        original = (self.root / "facts/qa/QA-001.json").read_bytes()
+        self.put("QA-002", "QA_RESULT", resumed, CreatedAt="2026-09-15T01:00:06+08:00")
+        output = g.render(self.root, "qa-index")
+        self.assertIn("QA-001 | 1", output)
+        self.assertIn("QA-002 | 1", output)
+        self.assertEqual(original, (self.root / "facts/qa/QA-001.json").read_bytes())
+        resumed["ValidationPlanRef"] = "plan-v2"
+        self.put("QA-002", "QA_RESULT", resumed, CreatedAt="2026-09-15T01:00:06+08:00")
+        with self.assertRaisesRegex(g.Invalid, "resume unchanged plan"):
+            g.render(self.root, "qa-index")
+
+    def test_v302_inherits_failure_attribution_without_relaxing_protocol(self):
+        (self.root / "开发上下文包.md").write_text("事实协议版本：v3.0.2\n", encoding="utf-8")
+        self.qa.update(Status="BLOCKED", BlockingItems=[dict(BlockerId="B-01", AffectedValidationIds=["V-01"])])
+        for attribution in ("PREEXISTING", "UNATTRIBUTED"):
+            with self.subTest(attribution=attribution):
+                self.qa["ObservedFailures"] = [dict(Attribution=attribution, ValidationIds=["V-01"], EvidenceRefs=["fixture log"])]
+                self.put("QA-001", "QA_RESULT", self.qa)
+                self.assertIn("BLOCKED", g.render(self.root, "qa-index"))
+        self.qa["ObservedFailures"][0]["Attribution"] = "CANDIDATE"
+        self.put("QA-001", "QA_RESULT", self.qa)
+        with self.assertRaisesRegex(g.Invalid, "FAIL invariant"):
+            g.render(self.root, "qa-index")
+        self.qa["Status"] = "FAIL"
+        self.put("QA-001", "QA_RESULT", self.qa)
+        self.assertIn("FAIL", g.render(self.root, "qa-index"))
+        self.put("QA-001", "QA_RESULT", dict(self.qa, FactProtocolVersion="v3.0.2"))
+        with self.assertRaisesRegex(g.Invalid, "FactProtocolVersion"):
+            g.render(self.root, "qa-index")
 
     def test_resume_rejects_changed_plan_round_or_missing_release(self):
         for change in (dict(ValidationPlanRef="plan-v2"), dict(QARound=2), dict(ResumeQAEventRef=None), dict(ResumeReadinessEventRef="TR-001")):
@@ -316,6 +349,15 @@ class CheckTests(unittest.TestCase):
         with self.assertRaises(g.Invalid):
             g.check(self.repo)
 
+    def test_v302_revision_notes_are_included_in_checks(self):
+        notes = self.repo / "docs/治理版本说明/v3.0.2治理修订说明.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("# 修订\n\n[missing](missing.md)\n", encoding="utf-8")
+        with self.assertRaisesRegex(g.Invalid, "local link"):
+            g.check(self.repo)
+        notes.write_text("# 修订\n", encoding="utf-8")
+        self.assertIn("14 Markdown", g.check(self.repo))
+
     def test_links_anchors_tables_and_rules(self):
         entry = self.repo / "AGENTS.md"
         entry.write_text("# Entry\n\n[section](#entry)\n\n| RuleId | Text |\n|---|---|\n| `GEN-001` | rule |\n\nUse `GEN-001`.\n", encoding="utf-8")
@@ -471,6 +513,127 @@ class V3PlanValidationTests(unittest.TestCase):
             ref = f"docs/requirements/REQ-20260915-099/{name}"
             if ref not in profile["RecordRefs"]:
                 profile["RecordRefs"].append(ref)
+
+    def enable_v302(self, business_revision):
+        governance_dir = self.repo / "docs/治理版本说明"
+        governance_dir.mkdir(parents=True, exist_ok=True)
+        governance = governance_dir / "v3.0.2治理修订说明.md"
+        governance.write_text("# 修订\n\n版本：v3.0.2；状态：`FROZEN`。\n", encoding="utf-8")
+        testing = self.repo / "docs/开发规范/测试规范.md"
+        testing.write_text("# 测试规范\n\n版本：v3.0.1；状态：`FROZEN`。\n", encoding="utf-8")
+        self.profile.update(
+            SchemaVersion="v3.0.2", GovernanceVersion="v3.0.2", DecisionRulesVersion="v3.0.2",
+            BaselineBindings={
+                "Governance": {
+                    "Version": "v3.0.2",
+                    "SourceRef": "docs/治理版本说明/v3.0.2治理修订说明.md",
+                    "SourceDigest": g.content_digest(governance.read_text(encoding="utf-8")),
+                    "Revision": None,
+                },
+                "BusinessRevision": business_revision,
+                "Testing": {
+                    "Version": "v3.0.1",
+                    "SourceRef": "docs/开发规范/测试规范.md",
+                    "SourceDigest": g.content_digest(testing.read_text(encoding="utf-8")),
+                    "Revision": None,
+                },
+            },
+            BaselineSupersession=None,
+        )
+        self.plan.update(SchemaVersion="v3.0.2", GovernanceVersion="v3.0.2")
+
+    def prepare_v302_rebaseline(self):
+        self.write()
+        subprocess.run(["git", "add", "docs/requirements/REQ-20260915-099"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "old frozen plan fixture"], cwd=self.repo, check=True)
+        old_plan_revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        history = self.requirement_dir / "history"
+        history.mkdir()
+        profile_snapshot = history / "control-profile-v1.0.json"
+        plan_snapshot = history / "acceptance-plan-v1.0.json"
+        profile_snapshot.write_bytes(self.profile_path.read_bytes())
+        plan_snapshot.write_bytes(self.plan_path.read_bytes())
+
+        baseline = self.requirement_dir / "需求基线.md"
+        baseline.write_text(
+            "# 基线\n\n- **产物版本：** v1.1\n\n## 1. 原始需求\n\n"
+            "> 用户可以导出精简内容。\n\n## 4. 业务结果与用户明确边界\n\n"
+            "| 用户明确的业务边界 / 约束 | 明确依据 |\n|---|---|\n"
+            "| 不再保留旧保存能力。 | 用户确认 |\n",
+            encoding="utf-8",
+        )
+        gate2 = copy.deepcopy(self.gate)
+        gate2.update(EventId="GATE-002", CreatedAt="2026-09-16T01:00:00+08:00")
+        gate2["Payload"].update(
+            ArtifactVersion="v1.1",
+            BasisRefs=["current-user-message:2026-09-16T01:00:00+08:00"],
+            ApprovalRef="current-user-message:2026-09-16T01:00:00+08:00",
+        )
+        gate2_path = self.requirement_dir / "facts/gates/GATE-002.json"
+        gate2_path.write_text(json.dumps(gate2, ensure_ascii=False), encoding="utf-8")
+
+        self.enable_v302(old_plan_revision)
+        self.profile.update(
+            ProfileVersion="v2.0",
+            PreviousProfileRef="control-profile.json",
+            PreviousProfileRevision=old_plan_revision,
+        )
+        self.plan.update(
+            PlanVersion="v2.0",
+            PreviousPlanRef="acceptance-plan.json",
+            PreviousPlanRevision=old_plan_revision,
+        )
+        source = self.profile["BusinessAcceptanceSources"][0]
+        source.update(
+            AcceptanceText="用户可以导出精简内容。",
+            ApprovalRef="docs/requirements/REQ-20260915-099/facts/gates/GATE-002.json",
+            SourceArtifactVersion="v1.1",
+            SourceDigest=g.content_digest(baseline.read_text(encoding="utf-8")),
+            ApprovalDigest=g.content_digest(gate2_path.read_text(encoding="utf-8")),
+            ProvenanceRevision=None,
+        )
+        self.plan["Controls"][0]["Statement"] = source["AcceptanceText"]
+        self.plan["Controls"] = [item for item in self.plan["Controls"] if item["ControlId"] != "RB-001"]
+        self.profile["ExecutionBudget"].update(
+            BlockingControlCount=1, AtomicRiskTargetCount=1, BlockingControlsMinutes=3,
+        )
+        current_baseline_ref = "docs/requirements/REQ-20260915-099/需求基线.md#1-原始需求"
+        current_g1_ref = "docs/requirements/REQ-20260915-099/facts/gates/GATE-002.json"
+        self.profile["BaselineSupersession"] = {
+            "Mode": "G1_BASELINE_SUPERSESSION",
+            "PreviousG1Ref": "docs/requirements/REQ-20260915-099/facts/gates/GATE-001.json",
+            "CurrentG1Ref": current_g1_ref,
+            "PreviousBaselineVersion": "v1.0",
+            "CurrentBaselineVersion": "v1.1",
+            "SupersededAcceptanceSourceIds": ["BAS-001"],
+            "SupersededControls": [
+                {"ControlId": ident, "Disposition": "REMOVED_OR_REPLACED_BY_CONFIRMED_BASELINE",
+                 "BasisRefs": [current_baseline_ref, current_g1_ref]}
+                for ident in ("BA-001", "RB-001")
+            ],
+            "HistoricalArtifactRefs": [
+                "docs/requirements/REQ-20260915-099/history/control-profile-v1.0.json",
+                "docs/requirements/REQ-20260915-099/history/acceptance-plan-v1.0.json",
+            ],
+            "HistoricalArtifactDigests": {
+                "docs/requirements/REQ-20260915-099/history/control-profile-v1.0.json":
+                    g.content_digest(profile_snapshot.read_text(encoding="utf-8")),
+                "docs/requirements/REQ-20260915-099/history/acceptance-plan-v1.0.json":
+                    g.content_digest(plan_snapshot.read_text(encoding="utf-8")),
+            },
+            "HistoricalSourceDisposition": "FULLY_REPLAYABLE",
+            "HistoricalSourceEvidenceRefs": [
+                "docs/requirements/REQ-20260915-099/history/control-profile-v1.0.json",
+                "docs/requirements/REQ-20260915-099/facts/gates/GATE-001.json",
+                "docs/requirements/REQ-20260915-099/需求基线.md",
+            ],
+            "HistoricalArtifactsRetained": True,
+            "PriorCandidatesReusable": False,
+            "NewG2Required": True,
+        }
+        self.write()
 
     def test_valid_lean_and_readonly_cli(self):
         before = (self.profile_path.read_bytes(), self.plan_path.read_bytes())
@@ -1050,6 +1213,104 @@ class V3PlanValidationTests(unittest.TestCase):
         self.write()
         with self.assertRaises(g.Invalid):
             g.validate_plan(self.profile_path, self.plan_path)
+
+    def test_v302_new_g1_rebaseline_can_exactly_supersede_old_controls(self):
+        self.prepare_v302_rebaseline()
+        result = g.validate_plan(self.profile_path, self.plan_path)
+        self.assertTrue(result["Valid"])
+        self.assertEqual(result["SchemaVersion"], "v3.0.2")
+
+    def test_v302_rebaseline_requires_human_g2_even_with_commands_only(self):
+        self.prepare_v302_rebaseline()
+        self.assertFalse(any(item["MethodKind"] == "DETERMINISTIC_ASSERTION" for item in self.plan["Controls"]))
+        self.assertEqual(g.validate_g2(self.profile_path, self.plan_path)["RequiredG2DecisionMode"], "HUMAN")
+
+    def test_v302_history_snapshots_must_match_git_predecessors(self):
+        self.prepare_v302_rebaseline()
+        supersession = self.profile["BaselineSupersession"]
+        for disposition in ("FULLY_REPLAYABLE", "DIGEST_ONLY_LEGACY_SOURCE_UNAVAILABLE"):
+            supersession["HistoricalSourceDisposition"] = disposition
+            for kind in ("control-profile", "acceptance-plan"):
+                with self.subTest(disposition=disposition, kind=kind):
+                    ref = next(ref for ref in supersession["HistoricalArtifactRefs"] if Path(ref).name.startswith(kind))
+                    path = self.repo / ref
+                    original = path.read_text(encoding="utf-8")
+                    altered = json.loads(original)
+                    if kind == "control-profile":
+                        altered["ExecutionBudget"]["AdvisoryMinutes"] = 99
+                    else:
+                        altered["Controls"][1]["Method"] = "forged historical method"
+                    path.write_text(json.dumps(altered, ensure_ascii=False), encoding="utf-8")
+                    supersession["HistoricalArtifactDigests"][ref] = g.content_digest(path.read_text(encoding="utf-8"))
+                    self.write()
+                    with self.assertRaisesRegex(g.Invalid, "historical .* predecessor binding"):
+                        g.validate_plan(self.profile_path, self.plan_path)
+                    path.write_text(original, encoding="utf-8")
+                    supersession["HistoricalArtifactDigests"][ref] = g.content_digest(original)
+        self.write()
+
+    def test_v302_preserves_community_linux_and_project_delivery_platforms(self):
+        self.enable_v302(self.provenance_revision)
+        self.profile["PlatformScope"].update(
+            LocalDevelopment=["LINUX"], DeliveryValidation="PROJECT_DEFINED", DeliveryValidationStatus="AVAILABLE",
+        )
+        for control in self.plan["Controls"]:
+            if control["ExecutionPlatform"] != "NONE":
+                control["ExecutionPlatform"] = "LINUX"
+        self.write()
+        self.assertTrue(g.validate_plan(self.profile_path, self.plan_path)["Valid"])
+
+    def test_v302_rebaseline_rejects_missing_or_unbound_dispositions(self):
+        self.prepare_v302_rebaseline()
+        valid_profile = copy.deepcopy(self.profile)
+        mutations = ("missing_control", "old_g1", "candidate_reuse", "no_supersession")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.profile = copy.deepcopy(valid_profile)
+                supersession = self.profile["BaselineSupersession"]
+                if mutation == "missing_control":
+                    supersession["SupersededControls"].pop()
+                elif mutation == "old_g1":
+                    supersession["CurrentG1Ref"] = supersession["PreviousG1Ref"]
+                elif mutation == "candidate_reuse":
+                    supersession["PriorCandidatesReusable"] = True
+                else:
+                    self.profile["BaselineSupersession"] = None
+                self.write()
+                with self.assertRaises(g.Invalid):
+                    g.validate_plan(self.profile_path, self.plan_path)
+
+    def test_v302_digest_only_legacy_source_requires_snapshot_gate_and_history(self):
+        self.prepare_v302_rebaseline()
+        supersession = self.profile["BaselineSupersession"]
+        supersession["HistoricalSourceDisposition"] = "DIGEST_ONLY_LEGACY_SOURCE_UNAVAILABLE"
+        baseline = self.requirement_dir / "需求基线.md"
+        baseline.write_text(
+            baseline.read_text(encoding="utf-8") + "\n历史：v1.0 / GATE-001.json\n",
+            encoding="utf-8",
+        )
+        self.profile["BusinessAcceptanceSources"][0]["SourceDigest"] = g.content_digest(
+            baseline.read_text(encoding="utf-8")
+        )
+        self.write()
+        original = g.validate_source_provenance
+
+        def unavailable(profile, path, historical_revision=None):
+            if historical_revision is not None:
+                raise g.Invalid("ControlProfile.BusinessAcceptanceSources[0]: SourceRef revision binding")
+            return original(profile, path, historical_revision)
+
+        with mock.patch.object(g, "validate_source_provenance", side_effect=unavailable):
+            self.assertTrue(g.validate_plan(self.profile_path, self.plan_path)["Valid"])
+
+        baseline.write_text(baseline.read_text(encoding="utf-8").replace("GATE-001.json", "missing-gate"), encoding="utf-8")
+        self.profile["BusinessAcceptanceSources"][0]["SourceDigest"] = g.content_digest(
+            baseline.read_text(encoding="utf-8")
+        )
+        self.write()
+        with mock.patch.object(g, "validate_source_provenance", side_effect=unavailable):
+            with self.assertRaises(g.Invalid):
+                g.validate_plan(self.profile_path, self.plan_path)
 
     def test_untriggered_control_and_reference_binding(self):
         rb = self.plan["Controls"][1]

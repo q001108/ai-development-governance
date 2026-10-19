@@ -10,7 +10,7 @@ developer_instructions = """
 
 你不生成 `RequirementId`、`RepairLineageRef`、`CandidateRef`、事件编号或连续计数；这些值只能原样使用运行时提供的事实。`workspace-write` 仅用于创建获准的需求基线或开发上下文包，不扩大你的治理职责或写入边界。
 
-仅在明确绑定并正式启用 v3.0.1 时，EXECUTION_PLANNING 按 docs/开发规范/测试规范.md 选择当前影响域的规则，并在 ControlProfile.BaselineBindings 分别绑定治理、业务代码与测试规范。EXCEPTION_ROUTING 遇到不可归因的既有失败或无效验证定义，按 docs/治理版本说明/v3.0.1治理修订说明.md 形成受控调整提案；运行时负责持久化独立调整记录并执行 validate-adjustment。不得自行批准提案、改写原计划或把 Valid=true 当成质量 PASS。单纯环境未就绪按既有等待与同轮恢复路径处理，不反复调用规划。
+仅在明确绑定并正式启用 v3.0.1 或 v3.0.2 时，EXECUTION_PLANNING 按 docs/开发规范/测试规范.md 选择当前影响域的规则，并在 ControlProfile.BaselineBindings 分别绑定治理、业务代码与测试规范。EXCEPTION_ROUTING 遇到不可归因的既有失败或无效验证定义，按 docs/治理版本说明/v3.0.1治理修订说明.md 形成受控调整提案；v3.0.2 按其修订说明继承这些规则，调整版本必须与 Profile 一致。运行时负责持久化独立调整记录并执行 validate-adjustment。不得自行批准提案、改写原计划或把 Valid=true 当成质量 PASS。单纯环境未就绪按既有等待与同轮恢复路径处理，不反复调用规划。
 
 调用方必须且只能提供以下一个选择器：
 - `Invocation: REQUIREMENT_AUDIT`

@@ -148,6 +148,12 @@ class AdjustmentTests(unittest.TestCase):
         with self.assertRaises(g.Invalid):
             g.validate_plan(self.f.profile_path, self.f.plan_path)
 
+    def test_adjustment_governance_version_must_match_profile(self):
+        self.data["GovernanceVersion"] = "v3.0.2" if self.f.profile["GovernanceVersion"] == "v3.0.1" else "v3.0.1"
+        self.approve()
+        with self.assertRaises(g.Invalid):
+            g.validate_adjustment(self.path)
+
     def quality(self):
         common = dict(AdjustmentRef=self.path.relative_to(self.f.repo).as_posix(), AdjustmentDigest=g.adjustment_digest(self.data),
                       CandidateDigestVerified=True, CountDisposition="ACTIVE", DispositionRef=None,
@@ -197,6 +203,19 @@ class AdjustmentTests(unittest.TestCase):
         self.fact("QA-003", "QA_RESULT", dict(Status="FAIL", CountDisposition="ACTIVE"), "qa", 10)
         with self.assertRaisesRegex(g.Invalid, "stale selected"):
             g.validate_adjusted_quality(self.path, qa, review)
+
+
+class V302AdjustmentTests(AdjustmentTests):
+    def setUp(self):
+        super().setUp()
+        self.f.enable_v302(self.f.provenance_revision)
+        self.f.write()
+        self.data.update(
+            GovernanceVersion="v3.0.2",
+            OriginalPlanDigest=self.digest(self.f.plan_path),
+            ControlProfileDigest=self.digest(self.f.profile_path),
+        )
+        self.approve()
 
 
 if __name__ == "__main__":
