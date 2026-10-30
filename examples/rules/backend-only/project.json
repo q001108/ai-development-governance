@@ -1,0 +1,29 @@
+{
+  "RuleCompositionVersion": "v1.0",
+  "GovernanceVersion": "v3.0.2",
+  "Core": {
+    "Source": "docs/开发规范/项目开发总则.md",
+    "Sha256": "56472302ae23c29fe9389161ec6e420ffcc92ed5cd1a0b95c5f5b912ac121bef"
+  },
+  "Modules": [
+    {
+      "ModuleId": "service",
+      "Root": "examples/rules/backend-only/service",
+      "Capabilities": [
+        "backend",
+        "api"
+      ],
+      "Parameters": {
+        "ApiContract": "examples/rules/backend-only/service/contract.md#api-contract"
+      }
+    }
+  ],
+  "Packs": [
+    {
+      "PackId": "backend-api",
+      "Version": "1.0.0",
+      "Source": "rulepacks/backend-api/1.0.0/pack.json",
+      "Sha256": "1028d652471cfe8ef108048dd54c972d36dce048046c44fa1c7b2a3e23bc2e75"
+    }
+  ]
+}

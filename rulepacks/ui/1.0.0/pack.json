@@ -1,0 +1,43 @@
+{
+  "RulePackFormatVersion": "v1.0",
+  "PackId": "ui",
+  "Version": "1.0.0",
+  "GovernanceVersions": [
+    "v3.0",
+    "v3.0.1",
+    "v3.0.2"
+  ],
+  "Document": {
+    "Source": "rulepacks/ui/1.0.0/rules.md",
+    "Sha256": "173741238cd4631da0d47464b49bde3ea759a00abbfbeefe8f545e79962dd363"
+  },
+  "Parameters": {
+    "DesignSource": {
+      "Kind": "FILE_REF"
+    }
+  },
+  "Rules": [
+    {
+      "RuleId": "UI-001",
+      "Section": "视觉来源",
+      "RequiresAll": [
+        "ui"
+      ],
+      "Parameters": [
+        "DesignSource"
+      ],
+      "ConflictsWith": []
+    },
+    {
+      "RuleId": "UI-002",
+      "Section": "操作反馈",
+      "RequiresAll": [
+        "ui"
+      ],
+      "Parameters": [
+        "DesignSource"
+      ],
+      "ConflictsWith": []
+    }
+  ]
+}

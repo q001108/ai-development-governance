@@ -1,0 +1,4 @@
+interface:
+  display_name: "Development Governance"
+  short_description: "Versioned governance and local test preparation for Codex projects"
+  default_prompt: "Use $development-governance to continue this project's adopted governance workflow."

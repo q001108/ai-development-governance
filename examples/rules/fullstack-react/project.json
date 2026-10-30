@@ -1,0 +1,60 @@
+{
+  "RuleCompositionVersion": "v1.0",
+  "GovernanceVersion": "v3.0.2",
+  "Core": {
+    "Source": "docs/开发规范/项目开发总则.md",
+    "Sha256": "56472302ae23c29fe9389161ec6e420ffcc92ed5cd1a0b95c5f5b912ac121bef"
+  },
+  "Modules": [
+    {
+      "ModuleId": "service",
+      "Root": "examples/rules/fullstack-react/service",
+      "Capabilities": [
+        "backend",
+        "api"
+      ],
+      "Parameters": {
+        "ApiContract": "examples/rules/fullstack-react/service/contract.md#api-contract"
+      }
+    },
+    {
+      "ModuleId": "web",
+      "Root": "examples/rules/fullstack-react/web",
+      "Capabilities": [
+        "frontend",
+        "ui",
+        "react"
+      ],
+      "Parameters": {
+        "FrontendConventions": "examples/rules/fullstack-react/web/conventions.md#react-module",
+        "DesignSource": "examples/rules/fullstack-react/web/conventions.md#design-source"
+      }
+    }
+  ],
+  "Packs": [
+    {
+      "PackId": "backend-api",
+      "Version": "1.0.0",
+      "Source": "rulepacks/backend-api/1.0.0/pack.json",
+      "Sha256": "1028d652471cfe8ef108048dd54c972d36dce048046c44fa1c7b2a3e23bc2e75"
+    },
+    {
+      "PackId": "frontend",
+      "Version": "1.0.0",
+      "Source": "rulepacks/frontend/1.0.0/pack.json",
+      "Sha256": "8fc49d97c85ae9f339829d1328b94afbd84d24b88d9372bec9d34d5cca937d44"
+    },
+    {
+      "PackId": "ui",
+      "Version": "1.0.0",
+      "Source": "rulepacks/ui/1.0.0/pack.json",
+      "Sha256": "01587e48f6c72aea01bce16c4b705a0bf6e51d640aeb3b8207d48a4264467c8a"
+    },
+    {
+      "PackId": "frontend-react",
+      "Version": "1.0.0",
+      "Source": "rulepacks/frontend-react/1.0.0/pack.json",
+      "Sha256": "8cfcaf475370a228b62371319a2649516916c8e85bbb832734052b0abe039ad9"
+    }
+  ]
+}

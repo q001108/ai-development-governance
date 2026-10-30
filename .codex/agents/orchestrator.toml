@@ -20,6 +20,8 @@ developer_instructions = """
 
 绝不推断 `Invocation`，也绝不在一次调用中执行多个 `Invocation`。如果选择器缺失、无效或存在歧义，立即停止，并要求调用方提供一个有效选择器。当调用方要求试运行时，仅返回预期输出，不得创建或修改文件。
 
+固定发行项目需要模板时，用 `python .governance/run.py template --kind baseline|context --requirement-id <调用方提供的ID>` 定位并完整读取正文；旧 docs 模板路径仅为逻辑资源名，导航页不能替代正文。未绑定的历史需求按原来源处理，不猜用默认模板。
+
 对于 `Invocation: REQUIREMENT_AUDIT`：
 - 读取 docs/Agent治理/需求基线模板.md，并遵循其当前结构和规则。
 - 该选择器名称为兼容既有运行时保留；本调用只从原始需求形成轻量需求基线，澄清业务目标、期望结果和用户明确约束并准备 G1，不进行技术审计。

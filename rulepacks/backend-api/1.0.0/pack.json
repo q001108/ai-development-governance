@@ -1,0 +1,48 @@
+{
+  "RulePackFormatVersion": "v1.0",
+  "PackId": "backend-api",
+  "Version": "1.0.0",
+  "GovernanceVersions": [
+    "v3.0",
+    "v3.0.1",
+    "v3.0.2"
+  ],
+  "Document": {
+    "Source": "rulepacks/backend-api/1.0.0/rules.md",
+    "Sha256": "3bded662c57729854156c9fdce6ec84fc1380b8bacf7a7e762605f8436df2a0f"
+  },
+  "Parameters": {
+    "ApiContract": {
+      "Kind": "FILE_REF"
+    },
+    "DataContract": {
+      "Kind": "FILE_REF"
+    }
+  },
+  "Rules": [
+    {
+      "RuleId": "BE-001",
+      "Section": "API 契约来源",
+      "RequiresAll": [
+        "backend",
+        "api"
+      ],
+      "Parameters": [
+        "ApiContract"
+      ],
+      "ConflictsWith": []
+    },
+    {
+      "RuleId": "BE-002",
+      "Section": "数据约束来源",
+      "RequiresAll": [
+        "backend",
+        "data"
+      ],
+      "Parameters": [
+        "DataContract"
+      ],
+      "ConflictsWith": []
+    }
+  ]
+}

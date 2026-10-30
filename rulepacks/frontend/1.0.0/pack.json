@@ -1,0 +1,41 @@
+{
+  "RulePackFormatVersion": "v1.0",
+  "PackId": "frontend",
+  "Version": "1.0.0",
+  "GovernanceVersions": [
+    "v3.0",
+    "v3.0.1",
+    "v3.0.2"
+  ],
+  "Document": {
+    "Source": "rulepacks/frontend/1.0.0/rules.md",
+    "Sha256": "e68a372b040562ad960577ce1fb23d929fcc26de105f7a3db6d420f1b00ad4eb"
+  },
+  "Parameters": {
+    "FrontendConventions": {
+      "Kind": "FILE_REF"
+    }
+  },
+  "Rules": [
+    {
+      "RuleId": "FE-001",
+      "Section": "模块实现来源",
+      "RequiresAll": [
+        "frontend"
+      ],
+      "Parameters": [
+        "FrontendConventions"
+      ],
+      "ConflictsWith": []
+    },
+    {
+      "RuleId": "FE-002",
+      "Section": "交互状态边界",
+      "RequiresAll": [
+        "frontend"
+      ],
+      "Parameters": [],
+      "ConflictsWith": []
+    }
+  ]
+}

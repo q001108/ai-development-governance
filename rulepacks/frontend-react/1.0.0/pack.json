@@ -1,0 +1,33 @@
+{
+  "RulePackFormatVersion": "v1.0",
+  "PackId": "frontend-react",
+  "Version": "1.0.0",
+  "GovernanceVersions": [
+    "v3.0",
+    "v3.0.1",
+    "v3.0.2"
+  ],
+  "Document": {
+    "Source": "rulepacks/frontend-react/1.0.0/rules.md",
+    "Sha256": "e47159d3dd7169873ceb348a94bfb6302bc23c8e27490af661bac2a75fdfe921"
+  },
+  "Parameters": {
+    "FrontendConventions": {
+      "Kind": "FILE_REF"
+    }
+  },
+  "Rules": [
+    {
+      "RuleId": "FE-101",
+      "Section": "React 模块约定",
+      "RequiresAll": [
+        "frontend",
+        "react"
+      ],
+      "Parameters": [
+        "FrontendConventions"
+      ],
+      "ConflictsWith": []
+    }
+  ]
+}

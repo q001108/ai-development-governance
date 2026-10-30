@@ -1,0 +1,10 @@
+# Community maintenance only; not a dependency of adopted business projects.
+name: governance-dev
+channels:
+  - defaults
+dependencies:
+  - python=3.12.7
+  - pyyaml=6.0.3
+variables:
+  PYTHONUTF8: "1"
+  PYTHONDONTWRITEBYTECODE: "1"

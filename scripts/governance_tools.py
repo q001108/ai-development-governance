@@ -315,7 +315,7 @@ def validate_schema_instance(instance, schema, label="instance"):
 
 
 def validate_contract_schema(instance, repo, schema_name, label):
-    schema_path = safe_path(repo, Path(repo) / "docs/Agent治理/contracts" / schema_name)
+    schema_path = resource_path(repo, Path(repo) / "docs/Agent治理/contracts" / schema_name)
     require(schema_path.is_file(), f"{label} schema file")
     schema = load_contract(schema_path, f"{label} schema")
     require(schema.get("$schema") == "https://json-schema.org/draft/2020-12/schema", f"{label} schema dialect")
@@ -329,7 +329,56 @@ def repository_root(path):
     raise Invalid(f"{LOCATION.get()}: invalid or unsupported field: repository root")
 
 
-def reference_path(repo, containing_file, reference):
+def release_resources(repo):
+    """Only a tool executing inside this project's retained release owns resources."""
+    repo = Path(repo).absolute()
+    root = Path(__file__).absolute().parent.parent
+    if root.parent != repo / ".governance/releases" or not re.fullmatch(r"[0-9a-f]{64}", root.name):
+        return None, {}
+    safe_path(repo, root)
+    manifest = load_contract(safe_path(repo, root / "release.json"), "release resources")
+    files = manifest.get("Files")
+    require(isinstance(files, dict), "release resource inventory")
+    return root, files
+
+
+def release_owned(source):
+    return (source.startswith(("docs/Agent治理/", "docs/治理版本说明/", "rulepacks/"))
+            or source in ("docs/开发规范/项目开发总则.md", "docs/开发规范/测试规范.md"))
+
+
+def resource_path(repo, logical_path):
+    """Keep business paths project-owned while pinning readonly distribution assets."""
+    repo = Path(repo).absolute()
+    logical = Path(logical_path)
+    logical = safe_path(repo, logical if logical.is_absolute() else repo / logical)
+    source = logical.resolve().relative_to(repo.resolve()).as_posix()
+    root, files = release_resources(repo)
+    if root is None or not release_owned(source):
+        return logical
+    if source not in files and source.startswith(("docs/Agent治理/", "docs/治理版本说明/")) and not source.startswith("docs/Agent治理/contracts/") and logical.is_file():
+        return logical  # Additional project/legacy documents are not package-owned assets.
+    require(source in files, "resource listed by selected release")
+    target = safe_path(repo, root / source)
+    require(target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == files[source], "release resource digest")
+    return target
+
+
+def resource_glob(repo, directory, pattern):
+    """Return logical identities with selected core assets and project domain files."""
+    repo = Path(repo).absolute()
+    root, files = release_resources(repo)
+    paths = {path.relative_to(repo).as_posix(): path for path in (repo / directory).glob(pattern)}
+    if root is not None:
+        paths = {source: path for source, path in paths.items() if source not in files}
+        for path in (root / directory).glob(pattern):
+            source = path.relative_to(root).as_posix()
+            require(source in files, "listed release resource")
+            paths[source] = resource_path(repo, repo / source)
+    return dict(sorted(paths.items()))
+
+
+def logical_reference_path(repo, containing_file, reference):
     """Resolve a repository reference; nested relative paths stay beside the contract."""
     plain = reference.split("#", 1)[0].replace("\\", "/")
     require(bool(plain) and not urlsplit(plain).scheme, "reference")
@@ -338,6 +387,10 @@ def reference_path(repo, containing_file, reference):
     if candidate.is_absolute() or (parts and parts[0] in ("docs", "scripts", ".codex")) or plain == "AGENTS.md":
         return safe_path(repo, candidate if candidate.is_absolute() else repo / candidate)
     return safe_path(repo, Path(containing_file).parent / candidate)
+
+
+def reference_path(repo, containing_file, reference):
+    return resource_path(repo, logical_reference_path(repo, containing_file, reference))
 
 
 def validate_file_reference(repo, containing_file, reference, field):
@@ -356,7 +409,7 @@ def validate_control_source_ref(repo, containing_file, reference, selected_profi
     if reference.startswith("RULE:"):
         rule = reference[5:]
         require(bool(re.fullmatch(r"[A-Z]{2,8}-\d{3}", rule)), "SourceRefs RuleId")
-        documents = (Path(repo) / "docs/开发规范").glob("*.md")
+        documents = resource_glob(repo, "docs/开发规范", "*.md").values()
         defined = set()
         for path in documents:
             defined.update(re.findall(r"(?m)^\|\s*`?([A-Z]{2,8}-\d{3})`?\s*\|", path.read_text(encoding="utf-8-sig")))
@@ -606,9 +659,10 @@ def validate_baseline_bindings(bindings, repo, control_path, governance_version)
         path = validate_file_reference(repo, control_path, binding["SourceRef"], key + " SourceRef")
         expected = (f"docs/治理版本说明/{governance_version}治理修订说明.md"
                     if key == "Governance" else "docs/开发规范/测试规范.md")
-        require(path.resolve() == (repo / expected).resolve(), key + " canonical source")
+        logical = logical_reference_path(repo, control_path, binding["SourceRef"])
+        require(logical.resolve() == (repo / expected).resolve(), key + " canonical source")
         require(path.suffix == ".md", key + " Markdown source")
-        text = (git_text(repo, binding["Revision"], path.relative_to(repo).as_posix(), key)
+        text = (git_text(repo, binding["Revision"], logical.resolve().relative_to(repo.resolve()).as_posix(), key)
                 if binding["Revision"] is not None else path.read_text(encoding="utf-8-sig"))
         require(content_digest(text) == binding["SourceDigest"], key + " SourceDigest")
         require(bool(re.search(rf"(?m)^版本[：:]\s*{re.escape(expected_version)}(?:[；;\s]|$)", text)), key + " document version")
@@ -1766,13 +1820,16 @@ def anchors(text):
 def check(repo):
     LOCATION.set("repository")
     repo = Path(repo).absolute()
-    files = [repo / "AGENTS.md", *sorted((repo / "docs/Agent治理").glob("*.md")), *sorted((repo / "docs/开发规范").glob("*.md"))]
-    files += sorted((repo / "docs/治理版本说明").glob("v3.0.*.md"))
+    governance_docs = resource_glob(repo, "docs/Agent治理", "*.md")
+    development_docs = resource_glob(repo, "docs/开发规范", "*.md")
+    files = {"AGENTS.md": repo / "AGENTS.md", **governance_docs, **development_docs,
+             **resource_glob(repo, "docs/治理版本说明", "v3.0.*.md")}
     expected_docs = {"Codex运行时拓扑", "多智能体协同开发治理流程", "治理配置与验收控制规范", "治理运行时事实协议", "开发溯源归档规范", "需求基线模板", "开发上下文包模板", "开发记录模板", "临时质量验证记录模板", "只读评审记录模板"}
-    require(expected_docs <= {p.stem for p in (repo / "docs/Agent治理").glob("*.md")}, "governance document inventory")
-    require({"项目开发总则", "测试规范"} <= {p.stem for p in (repo / "docs/开发规范").glob("*.md")}, "development standards inventory")
-    texts = {p: safe_path(repo, p).read_text(encoding="utf-8-sig") for p in files}
-    schemas = sorted((repo / "docs/Agent治理/contracts").glob("*.schema.json"))
+    require(expected_docs <= {p.stem for p in governance_docs.values()}, "governance document inventory")
+    require({"项目开发总则", "测试规范"} <= {p.stem for p in development_docs.values()}, "development standards inventory")
+    texts = {source: safe_path(repo, path).read_text(encoding="utf-8-sig") for source, path in files.items()}
+    schemas = resource_glob(repo, "docs/Agent治理/contracts", "*.schema.json").values()
+    schemas = list(schemas)
     require({"control-profile.schema.json", "acceptance-plan.schema.json", "replay-expectations.schema.json"} == {path.name for path in schemas}, "v3 schema inventory")
     for schema in schemas:
         LOCATION.set(schema.relative_to(repo).as_posix())
@@ -1784,8 +1841,9 @@ def check(repo):
     rules = set()
     for text in texts.values():
         rules.update(re.findall(r"(?m)^\|\s*`?((?:ROUTE|[A-Z]{2,8})-\d{3})`?\s*\|", text))
-    for path, text in texts.items():
-        LOCATION.set(path.relative_to(repo).as_posix())
+    for source, text in texts.items():
+        path = repo / source
+        LOCATION.set(source)
         body = markdown_body(text)
         width = None
         for line in body.splitlines():
@@ -1800,7 +1858,17 @@ def check(repo):
             url = urlsplit(target)
             if url.scheme or url.netloc:
                 continue
-            local = safe_path(repo, (path.parent / unquote(url.path)).absolute()) if url.path else path
+            if url.path:
+                target = (path.parent / unquote(url.path)).absolute()
+                local = safe_path(repo, target) if files[source] == path else resource_path(repo, target)
+                if files[source] == path and not local.exists():
+                    from governance_project import TEMPLATES, project_config
+                    config = project_config(repo)
+                    logical = target.resolve().relative_to(repo.resolve()).as_posix()
+                    if config and config.get("TemplateLayout") == "RELEASE_ONLY" and logical in TEMPLATES.values():
+                        local = resource_path(repo, target)
+            else:
+                local = files[source]
             require(local.exists(), path.name + " local link")
             if url.fragment and local.suffix == ".md":
                 require(unquote(url.fragment) in anchors(local.read_text(encoding="utf-8-sig")), path.name + " anchor")

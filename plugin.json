@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "development-governance",
+  "version": "0.1.0-dev.7",
+  "description": "Versioned development governance, local test preparation, and project adaptation for Codex.",
+  "author": {"name": "q001108"},
+  "repository": "https://github.com/q001108/ai-development-governance",
+  "license": "Apache-2.0"
+}
